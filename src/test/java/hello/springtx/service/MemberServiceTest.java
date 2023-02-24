@@ -1,5 +1,6 @@
 package hello.springtx.service;
 
+import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.*;
 
 import hello.springtx.repository.LogRepository;
@@ -36,4 +37,23 @@ class MemberServiceTest {
         assertTrue(memberRepository.find(username).isPresent());
         assertTrue(logRepository.find(username).isPresent());
     }
+    /**
+     * MemberService @Transactional:OFF
+     * MemberRepository @Transactional: ON
+     * LogRepository @Transactional: ON Exception
+     */
+    @Test
+    void outerTxOff_fail(){
+        // given
+        String username = "로그예외_outerTxOff_fail";
+
+        // when
+        assertThatThrownBy(() -> memberService.joinV1(username))
+                .isInstanceOf(RuntimeException.class);
+
+        // then : 완전히 롤백되지 않고, member 데이터가 남아서 저장됨.
+        assertTrue(memberRepository.find(username).isPresent());
+        assertTrue(logRepository.find(username).isEmpty());
+    }
+
 }
