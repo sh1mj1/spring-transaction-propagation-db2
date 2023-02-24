@@ -7,6 +7,7 @@ import hello.springtx.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Slf4j
 @Service
@@ -16,6 +17,7 @@ public class MemberService {
     private final MemberRepository memberRepository;
     private final LogRepository logRepository;
 
+    @Transactional // 추가
     public void joinV1(String username) {
         Member member = new Member(username);
         Log logMessage = new Log(username);

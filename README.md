@@ -365,3 +365,109 @@ if (logMessage.getMessage().contains("로그예외")) {
 > **참고** - 트랜잭션 AOP도 결국 내부에서는 트랜잭션 매니저를 사용합니다.
 이 경우 회원은 저장되지만, 회원 이력 로그는 롤백됨. 따라서 데이터 정합성에 문제가 발생할 수 있음.
 >
+
+# 2. 단일 트랜잭션
+
+### **트랜잭션 하나만 사용하기**
+
+회원 리포지토리와 로그 리포지토리를 하나의 트랜잭션으로 묶는 가장 간단한 방법은 **이 둘을 호출하는 회원 서비스에만 트랜잭션을 사용**하는 것입니다.
+
+그에 맞게 코드를 수정하고 Test 메서드를 수정합시다.
+
+`MemberService - joinV1()`
+
+```java
+@Transactional //추가
+public void joinV1(String username)
+```
+
+`MemberRepository - save()`
+
+```java
+//@Transactional //제거
+public void save(Member member)
+```
+
+`LogRepository - save()`
+
+```java
+//@Transactional //제거
+public void save(Log logMessage)
+```
+
+`MemberRepository`, `LogRepository`의 `@Transactional` 코드를 제거
+
+`MemberService`에만 `@Transactional` 코드를 추가
+
+`singleTx`
+
+```java
+/**
+* MemberService @Transactional:ON
+* MemberRepository @Transactional:OFF
+* LogRepository @Transactional:OFF
+*/
+@Test
+void singleTx() {
+    //given
+    String username = "singleTx";
+  
+    //when
+    memberService.joinV1(username);
+  
+    //then: 모든 데이터가 정상 저장된다.
+    assertTrue(memberRepository.find(username).isPresent());
+    assertTrue(logRepository.find(username).isPresent());
+}
+```
+
+![https://user-images.githubusercontent.com/52024566/209555139-c96d9341-01f2-4abd-8fe0-afae51e814c5.png](https://user-images.githubusercontent.com/52024566/209555139-c96d9341-01f2-4abd-8fe0-afae51e814c5.png)
+
+이렇게 하면 `MemberService`를 시작할 때 부터 종료할 때 까지의 모든 로직을 하나의 트랜잭션으로 묶을 수 있습니다.
+
+- 물론 `MemberService`가 `MemberRepository`, `LogRepository`를 호출하므로 이 로직들은 같은 트랜잭션을 사용합니다.
+
+`MemberService`만 트랜잭션을 처리하기 때문에 앞서 배운 논리 트랜잭션, 물리 트랜잭션, 외부 트랜잭션, 내부 트랜잭션, `rollbackOnly`, 신규 트랜잭션, 트랜잭션 전파와 같은 복잡한 것을 고민할 필요가 없습니다.
+
+이렇게 아주 단순하고 깔끔하게 트랜잭션을 묶을 수 있습니다.
+
+![https://user-images.githubusercontent.com/52024566/209555144-549adabe-0ac3-40ae-a8f7-1c81745ba580.png](https://user-images.githubusercontent.com/52024566/209555144-549adabe-0ac3-40ae-a8f7-1c81745ba580.png)
+
+`@Transactional`이 `MemberService`에만 붙어있기 때문에 **MemberService만 트랜잭션 AOP가 적용**됩니다.
+
+`MemberRepository`, `LogRepository`는 트랜잭션 AOP가 적용되지 않습니다.
+
+`MemberService`의 시작부터 끝까지, 관련 로직은 해당 트랜잭션이 생성한 커넥션을 사용합니다.
+
+`MemberService`가 호출하는 `MemberRepository`, `LogRepository`도 같은 커넥션을 사용하면서 자연스럽게 트랜잭션 범위에 포함합니다.
+
+> **참고 -** 같은 쓰레드를 사용하면 트랜잭션 동기화 매니저는 같은 커넥션을 반환
+> 
+
+### **각각 트랜잭션이 필요한 상황**
+
+하지만 만약 아래 그림처럼 각각 트랜잭션이 필요하면 어떻게 할까요?
+
+![https://user-images.githubusercontent.com/52024566/209555145-ac22fee8-7d72-4e6c-866b-6882a8fadc92.png](https://user-images.githubusercontent.com/52024566/209555145-ac22fee8-7d72-4e6c-866b-6882a8fadc92.png)
+
+**트랜잭션 적용 범위**
+
+![https://user-images.githubusercontent.com/52024566/209555149-4d21f889-93be-40cd-831b-6d80ce322c95.png](https://user-images.githubusercontent.com/52024566/209555149-4d21f889-93be-40cd-831b-6d80ce322c95.png)
+
+클라이언트 A는 `MemberService`부터 `MemberRepository` , `LogRepository`를 모두 하나의 트랜잭션으로 묶고 싶습니다.
+
+클라이언트 B는 `MemberRepository`만 호출하고 여기에만 트랜잭션을 사용하고 싶습니다.
+
+클라이언트 C는 `LogRepository`만 호출하고 여기에만 트랜잭션을 사용하고 싶습니다.
+
+클라이언트 A만 생각하면 `MemberService`에 트랜잭션 코드를 남기고, `MemberRepository`, `LogRepository`의 트랜잭션 코드를 제거하면 앞서 배운 것 처럼 깔끔하게 하나의 트랜잭션을 적용할 수 있습니다.
+
+하지만 이렇게 되면 클라이언트 B, C가 호출하는 `MemberRepository`, `LogRepository`에는 트랜잭션을 적용할 수 없습니다.
+
+트랜잭션 전파 없이 이런 문제를 해결하려면 아마 **트랜잭션이 있는 메서드와 트랜잭션이 없는 메서드를 각각 만들어야** 합니다. 이 경우에는 **더 복잡**하게 다음과 같은 상황이 발생할 수도 있습니다.
+
+![https://user-images.githubusercontent.com/52024566/209555303-251aaddc-88f8-449f-a043-4f3fb89ed5ab.png](https://user-images.githubusercontent.com/52024566/209555303-251aaddc-88f8-449f-a043-4f3fb89ed5ab.png)
+
+클라이언트 Z가 호출하는 `OrderService`에서도 트랜잭션을 시작할 수 있어야 하고, 클라이언트A가 호출하는 `MemberService`에서도 트랜잭션을 시작할 수 있어야 합니다.
+
+결국 **이런 문제를 해결하기 위해 트랜잭션 전파가 필요하게 됩니다.**
