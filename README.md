@@ -471,3 +471,74 @@ void singleTx() {
 클라이언트 Z가 호출하는 `OrderService`에서도 트랜잭션을 시작할 수 있어야 하고, 클라이언트A가 호출하는 `MemberService`에서도 트랜잭션을 시작할 수 있어야 합니다.
 
 결국 **이런 문제를 해결하기 위해 트랜잭션 전파가 필요하게 됩니다.**
+
+# 3. 전파 커밋
+
+스프링은 `@Transactional`이 적용되어 있으면 기본으로 `REQUIRED`라는 전파 옵션을 사용합니다. 
+
+이 옵션은 이전 글에서도 설명했듯 기존 트랜잭션이 없으면 트랜잭션을 생성하고, 기존 트랜잭션이 있으면 기존 트랜잭션에 참여합니다. 참여한다는 뜻은 해당 트랜잭션을 그대로 따른다는 뜻이고, 동시에 같은 동기화 커넥션을 사용한다는 의미입니다.
+
+![https://user-images.githubusercontent.com/52024566/209814530-dddac598-76ef-4f44-b482-9e76ad47a4cf.png](https://user-images.githubusercontent.com/52024566/209814530-dddac598-76ef-4f44-b482-9e76ad47a4cf.png)
+
+이렇게 둘 이상의 트랜잭션이 하나의 물리 트랜잭션에 묶이게 되면 둘을 구분하기 위해 논리 트랜잭션과 물리 트랜잭션으로 구분합니다.
+
+**신규 트랜잭션**
+
+![https://user-images.githubusercontent.com/52024566/209814539-fa02aa35-e2ea-4f8d-a900-01eb328e445f.png](https://user-images.githubusercontent.com/52024566/209814539-fa02aa35-e2ea-4f8d-a900-01eb328e445f.png)
+
+이 경우 외부에 있는 신규 트랜잭션만 실제 물리 트랜잭션을 시작하고 커밋합니다.
+
+내부에 있는 트랜잭션은 물리 트랜잭션 시작하거나 커밋하지 않습니다.
+
+**모든 논리 트랜잭션 커밋**
+
+![https://user-images.githubusercontent.com/52024566/209814542-8b9338f0-457a-4402-98ab-c7422e5ab399.png](https://user-images.githubusercontent.com/52024566/209814542-8b9338f0-457a-4402-98ab-c7422e5ab399.png)
+
+모든 논리 트랜잭션을 커밋해야 물리 트랜잭션도 커밋됩니다. 하나라도 롤백되면 물리 트랜잭션은 롤백됩니다.
+
+### 모든 논리 트랜잭션이 정상 커밋되는 경우
+
+`outerTxOn_success`
+
+```java
+/**
+* MemberService @Transactional:ON
+* MemberRepository @Transactional:ON
+* LogRepository @Transactional:ON
+*/
+@Test
+void outerTxOn_success() {
+    //given
+    String username = "outerTxOn_success";
+  
+    //when
+    memberService.joinV1(username);
+  
+    //then: 모든 데이터가 정상 저장된다.
+    assertTrue(memberRepository.find(username).isPresent());
+    assertTrue(logRepository.find(username).isPresent());
+}
+```
+
+![https://user-images.githubusercontent.com/52024566/209814544-0f3a5df4-d9da-49ce-80cd-0f192c9ce31e.png](https://user-images.githubusercontent.com/52024566/209814544-0f3a5df4-d9da-49ce-80cd-0f192c9ce31e.png)
+
+클라이언트A(여기서는 테스트 코드)가 `MemberService`를 호출하면서 트랜잭션 AOP 을 호출합니다.
+
+여기서 신규 트랜잭션이 생성되고, 물리 트랜잭션도 시작됩니다.
+
+`MemberRepository`를 호출하면서 트랜잭션 AOP 호출
+
+- 이미 트랜잭션이 있으므로 기존 트랜잭션에 참여합니다.
+- `MemberRepository`의 로직 호출이 끝나고 정상 응답하면 트랜잭션 AOP 을 호출합니다.
+- 트랜잭션 AOP는 정상 응답이므로 트랜잭션 매니저에 커밋을 요청합니다. 이 경우 신규 트랜잭션이 아니므로 실제 커밋은 호출하지 않습니다.
+
+`LogRepository`를 호출하면서 트랜잭션 AOP 호출
+
+- 이미 트랜잭션이 있으므로 기존 트랜잭션에 참여합니다.
+- `LogRepository`의 로직 호출이 끝나고 정상 응답하면 트랜잭션 AOP 을 호출합니다.
+- 트랜잭션 AOP는 정상 응답이므로 트랜잭션 매니저에 커밋을 요청합니다. 이 경우 신규 트랜잭션이 아니므로 실제 커밋(물리 커밋)을 호출하지 않습니다.
+
+`MemberService`의 로직 호출이 끝나고 정상 응답하면 트랜잭션 AOP 을 호출합니다.
+
+- 트랜잭션 AOP는 정상 응답이므로 트랜잭션 매니저에 커밋을 요청합니다. 이 경우 신규 트랜잭션이므로 물리 커밋을 호출합니다.
+
