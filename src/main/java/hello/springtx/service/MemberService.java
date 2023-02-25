@@ -31,6 +31,7 @@ public class MemberService {
         log.info("== logRepository 호출 종료 ==");
     }
 
+    // 예외를 잡아서 정상 흐름으로 변환하는 로직 추가
     public void joinV2(String username) {
         Member member = new Member(username);
         Log logMessage = new Log(username);
@@ -43,7 +44,7 @@ public class MemberService {
         try {
             logRepository.save(logMessage);
         } catch (RuntimeException e) {
-            log.info("log 저장에 실패했습니다. logMessage={}", logMessage.getMessage());
+            log.info("log 저장에 실패했습니다. logMessage={}", logMessage);
             log.info("정상 흐름 변환");
         }
         log.info("== logRepository 호출 종료 ==");

@@ -609,3 +609,87 @@ void outerTxOn_fail() {
 
 회원과 회원 이력 로그를 처리하는 부분을 하나의 트랜잭션으로 묶은 덕분에 문제가 발생했을 때 회원과 회원 이력 로그가 모두 함께 롤백됩니다. 따라서 데이터 정합성에 문제가 발생하지 않습니다.
 
+# 5. 복구 REQUIRED
+
+앞서 회원과 로그를 하나의 트랜잭션으로 묶어서 데이터 정합성 문제를 깔끔하게 해결하였습니다. 
+
+그런데 회원 이력 로그를 DB에 남기는 작업에 가끔 문제가 발생해서 회원 가입 자체가 안되는 경우가 가끔 발생합니다. 그래서 사용자들이 회원 가입에 실패해서 이탈하는 문제가 발생할 수 있죠. 
+
+회원 이력 로그의 경우 여러가지 방법으로 추후에 복구가 가능할 것으로 보입니다. 그래서 비즈니스 요구사항이 변경되었습니다. **회원 가입을 시도한 로그를 남기는데 실패하더라도 회원 가입은 유지되어야 합니다.**
+
+![https://user-images.githubusercontent.com/52024566/210072954-0ea00036-38a0-4218-89a3-327475b31e5d.png](https://user-images.githubusercontent.com/52024566/210072954-0ea00036-38a0-4218-89a3-327475b31e5d.png)
+
+단순하게 생각해보면 `LogRepository`에서 예외가 발생하면 그것을 `MemberService`에서 예외를 잡아서 처리하면 될 것 같습니다.
+
+이렇게 하면 `MemberService`에서 정상 흐름으로 바꿀 수 있기 때문에 `MemberService`의 트랜잭션 AOP에서 커밋을 수행할 수 있을 것으로 보입니다.
+
+.
+
+그런데 이 방법은 실패합니다. 이 방법이 왜 실패하는지 예제를 통해서 확인해봅시다.
+
+`recoverException_fail`
+
+```java
+/**
+* MemberService @Transactional:ON
+* MemberRepository @Transactional:ON
+* LogRepository @Transactional:ON Exception
+*/
+@Test
+void recoverException_fail() {
+    //given
+    String username = "로그예외_recoverException_fail";
+  
+    //when
+    assertThatThrownBy(() -> memberService.joinV2(username))
+        .isInstanceOf(UnexpectedRollbackException.class);
+  
+    //then: 모든 데이터가 롤백된다.
+    assertTrue(memberRepository.find(username).isEmpty());
+    assertTrue(logRepository.find(username).isEmpty());
+}
+```
+
+여기서 `memberService.joinV2()`를 호출하는 부분을 주의해야 합니다. `joinV2()`에는 예외를 잡아서 정상 흐름으로 변환하는 로직이 추가됩니다.
+
+```java
+try {
+    logRepository.save(logMessage);
+} catch (RuntimeException e) {
+    log.info("log 저장에 실패했습니다. logMessage={}", logMessage);
+    log.info("정상 흐름 변환");
+}
+```
+
+![https://user-images.githubusercontent.com/52024566/210072960-9546f7b5-d68d-4c2d-92a9-7499354adcaf.png](https://user-images.githubusercontent.com/52024566/210072960-9546f7b5-d68d-4c2d-92a9-7499354adcaf.png)
+
+내부 트랜잭션에서 `rollbackOnly`를 설정하기 때문에 결과적으로 정상 흐름 처리를 해서 외부 트랜잭션에서 커밋을 호출해도 물리 트랜잭션은 롤백됩니다.
+
+그리고 `UnexpectedRollbackException` 이 던져집니다.
+
+### **전체 흐름**
+
+![https://user-images.githubusercontent.com/52024566/210072963-c8cffbd9-1ecb-41d0-b3a9-4ce79a84d54c.png](https://user-images.githubusercontent.com/52024566/210072963-c8cffbd9-1ecb-41d0-b3a9-4ce79a84d54c.png)
+
+`LogRepository`에서 예외가 발생합니다. 예외를 던지면 `LogRepository`의 트랜잭션 AOP가 해당 예외를 받습니다.
+
+- 신규 트랜잭션이 아니므로 물리 트랜잭션을 롤백하지는 않고, 트랜잭션 동기화 매니저에 `rollbackOnly`를 표시
+
+이후 트랜잭션 AOP는 전달 받은 예외를 밖으로 던집니다.
+
+- 예외가 `MemberService`에 던져지고, `MemberService`는 해당 예외를 복구한다. 그리고 정상적으로 리턴.
+
+정상 흐름이 되었으므로 `MemberService`의 트랜잭션 AOP는 커밋을 호출합니다.
+
+- 커밋을 호출할 때 신규 트랜잭션이므로 실제 물리 트랜잭션을 커밋해야 함. 이때 `rollbackOnly`를 체크
+- `rollbackOnly`가 체크 되어 있으므로 물리 트랜잭션을 롤백
+- 트랜잭션 매니저는 `UnexpectedRollbackException` 예외를 던짐
+- 트랜잭션 AOP도 전달받은 `UnexpectedRollbackException`을 클라이언트에 던짐
+
+### **정리**
+
+논리 트랜잭션 중 하나라도 롤백되면 전체 트랜잭션은 롤백됩니다.
+
+내부 트랜잭션이 롤백 되었는데, 외부 트랜잭션이 커밋되면 `UnexpectedRollbackException` 예외가 발생합니다. 
+
+`rollbackOnly` 상황에서 커밋이 발생하면 `UnexpectedRollbackException` 예외가 발생한다는 것과 같은 의미입니다.
