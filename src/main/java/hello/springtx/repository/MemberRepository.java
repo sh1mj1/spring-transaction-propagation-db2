@@ -16,7 +16,7 @@ public class MemberRepository {
 
     private final EntityManager em;
 
-//    @Transactional // 제거
+    @Transactional // 제거
     public void save(Member member) {
         log.info("member 저장");
         em.persist(member);

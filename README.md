@@ -542,3 +542,70 @@ void outerTxOn_success() {
 
 - 트랜잭션 AOP는 정상 응답이므로 트랜잭션 매니저에 커밋을 요청합니다. 이 경우 신규 트랜잭션이므로 물리 커밋을 호출합니다.
 
+# 4. 전파 롤백
+
+**로그 리포지토리에서 예외가 발생해서 전체 트랜잭션이 롤백되는 경우**
+
+![https://user-images.githubusercontent.com/52024566/209965432-1c44e100-3162-4d09-863a-70368fc39b9b.png](https://user-images.githubusercontent.com/52024566/209965432-1c44e100-3162-4d09-863a-70368fc39b9b.png)
+
+`outerTxOn_fail`
+
+```java
+/**
+* MemberService @Transactional:ON
+* MemberRepository @Transactional:ON
+* LogRepository @Transactional:ON Exception
+*/
+@Test
+void outerTxOn_fail() {
+    //given
+    String username = "로그예외_outerTxOn_fail";
+  
+    //when
+    assertThatThrownBy(() -> memberService.joinV1(username))
+				    .isInstanceOf(RuntimeException.class);
+  
+    //then: 모든 데이터가 롤백된다.
+    assertTrue(memberRepository.find(username).isEmpty());
+    assertTrue(logRepository.find(username).isEmpty());
+}
+```
+
+여기서는 `로그예외`라고 넘겼기 때문에 `LogRepository`에서 런타임 예외가 발생합니다.
+
+**흐름**
+
+![https://user-images.githubusercontent.com/52024566/209965438-0e381d89-a030-4f69-abf5-402ea6be9c1a.png](https://user-images.githubusercontent.com/52024566/209965438-0e381d89-a030-4f69-abf5-402ea6be9c1a.png)
+
+클라이언트A가 `MemberService`를 호출하면서 트랜잭션 AOP 호출
+
+- 여기서 신규 트랜잭션이 생성되고, 물리 트랜잭션도 시작
+
+`MemberRepository`를 호출하면서 트랜잭션 AOP 호출
+
+- 이미 트랜잭션이 있으므로 기존 트랜잭션에 참여
+
+`MemberRepository`의 로직 호출이 끝나고 정상 응답하면 트랜잭션 AOP 호출
+
+- 트랜잭션 AOP는 정상 응답이므로 트랜잭션 매니저에 커밋을 요청. 이 경우 신규 트랜잭션이 아니므로 실제 커밋을 호출하지 않음
+
+`LogRepository`를 호출하면서 트랜잭션 AOP 호출
+
+- 이미 트랜잭션이 있으므로 기존 트랜잭션에 참여
+- `LogRepository` 로직에서 런타임 예외가 발생. 예외를 던지면 트랜잭션 AOP가 해당 예외를 받음
+    - 트랜잭션 AOP는 런타임 예외가 발생했으므로 트랜잭션 매니저에 롤백을 요청. 이 경우 신규 트랜잭션이 아니므로 물리 롤백을 호출하지는 않고 `rollbackOnly`를 설정
+    - `LogRepository`가 예외를 던졌기 때문에 트랜잭션 AOP도 해당 예외를 그대로 밖으로 던짐
+
+`MemberService`에서도 런타임 예외를 받게 되는데, 여기 로직에서는 해당 런타임 예외를 처리하지 않고 밖으로 던짐.
+
+- 트랜잭션 AOP는 런타임 예외가 발생했으므로 트랜잭션 매니저에 롤백을 요청. 이 경우 신규 트랜잭션이므로 물리 롤백을 호출
+- 참고로 이 경우 어차피 롤백이 되었기 때문에, `rollbackOnly` 설정은 참고하지 않음
+
+`MemberService`가 예외를 던졌기 때문에 트랜잭션 AOP도 해당 예외를 그대로 밖으로 던짐
+
+- 이렇게 클라이언트A는 `LogRepository`부터 넘어온 런타임 예외를 받게 됩니다.
+
+### **정리**
+
+회원과 회원 이력 로그를 처리하는 부분을 하나의 트랜잭션으로 묶은 덕분에 문제가 발생했을 때 회원과 회원 이력 로그가 모두 함께 롤백됩니다. 따라서 데이터 정합성에 문제가 발생하지 않습니다.
+

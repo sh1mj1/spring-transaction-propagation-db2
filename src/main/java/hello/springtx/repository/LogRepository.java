@@ -16,7 +16,7 @@ public class LogRepository {
 
     private final EntityManager em;
 
-//    @Transactional // 제거
+    @Transactional // 제거
     public void save(Log logMessage) {
         log.info("log 저장");
         em.persist(logMessage);
